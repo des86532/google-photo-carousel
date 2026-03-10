@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #000;
+  --color-foreground: #fff;
+}
+
+@layer base {
+  html, body {
+    @apply m-0 p-0 w-full h-full overflow-hidden bg-black text-white;
+    /* iPad touch action prevent */
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  #root {
+    @apply w-full h-full;
+  }
+}
