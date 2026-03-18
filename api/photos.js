@@ -1,24 +1,44 @@
 /* global process */
 
+/**
+ * Google Drive API - List images from a specific folder
+ * 
+ * Replaces the deprecated Google Photos Library API (deprecated March 31, 2025).
+ * 
+ * Setup:
+ * 1. Create a folder in Google Drive
+ * 2. Put your photos in it
+ * 3. Set GOOGLE_DRIVE_FOLDER_ID in your environment variables
+ * 4. Use a refresh token with `drive.readonly` scope
+ */
 export default async function handler(req, res) {
   // CORS setup
-  res.setHeader('Access-Control-Allow-Credentials', true)
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS')
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  )
+  );
 
   if (req.method === 'OPTIONS') {
-    res.status(200).end()
-    return
+    res.status(200).end();
+    return;
   }
 
-  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN } = process.env;
+  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, GOOGLE_DRIVE_FOLDER_ID } = process.env;
+
+  // Debug: list all GOOGLE_* env vars (keys only)
+  const googleEnvKeys = Object.keys(process.env).filter(k => k.startsWith('GOOGLE'));
+  console.log('Available GOOGLE_* env vars:', googleEnvKeys);
+  console.log('GOOGLE_DRIVE_FOLDER_ID value:', GOOGLE_DRIVE_FOLDER_ID ? `"${GOOGLE_DRIVE_FOLDER_ID}"` : 'UNDEFINED');
 
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
-    return res.status(500).json({ error: 'Missing environment variables for Google authentication' });
+    return res.status(500).json({ error: 'Missing Google authentication environment variables' });
+  }
+
+  if (!GOOGLE_DRIVE_FOLDER_ID) {
+    return res.status(500).json({ error: 'Missing GOOGLE_DRIVE_FOLDER_ID environment variable' });
   }
 
   try {
@@ -44,48 +64,69 @@ export default async function handler(req, res) {
 
     const { access_token } = await tokenResponse.json();
 
-    // 2. Fetch Photos
-    // Google Photos API configuration
-    // We can use a pageToken to get subsequent pages
-    // Using POST to /v1/mediaItems:search to support filtering
-    const queryUrl = 'https://photoslibrary.googleapis.com/v1/mediaItems:search';
-    
-    // Parse pageToken from query parameters
+    // 2. List image files from the specified Google Drive folder
     const urlParams = new URL(req.url, `http://${req.headers.host}`);
     const pageToken = urlParams.searchParams.get('pageToken') || '';
 
-    const payload = {
-      pageSize: 50,
-      filters: {
-        mediaTypeFilter: {
-          mediaTypes: ['PHOTO']
-        }
-      }
-    };
-
+    // Query: files in the specified folder that are images
+    const query = `'${GOOGLE_DRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`;
+    
+    const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
+    driveUrl.searchParams.set('q', query);
+    driveUrl.searchParams.set('pageSize', '50');
+    driveUrl.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,thumbnailLink,imageMediaMetadata)');
+    driveUrl.searchParams.set('orderBy', 'createdTime desc');
+    
     if (pageToken) {
-      payload.pageToken = pageToken;
+      driveUrl.searchParams.set('pageToken', pageToken);
     }
 
-    const photosResponse = await fetch(queryUrl, {
-      method: 'POST',
+    const driveResponse = await fetch(driveUrl.toString(), {
       headers: {
         'Authorization': `Bearer ${access_token}`,
-        'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload)
     });
 
-    if (!photosResponse.ok) {
-      const errorData = await photosResponse.json();
-      console.error('Error fetching photos:', errorData);
-      return res.status(500).json({ error: 'Failed to fetch photos', details: errorData });
+    if (!driveResponse.ok) {
+      const errorText = await driveResponse.text();
+      console.error('Error fetching files from Drive:', driveResponse.status, errorText);
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        errorData = { raw: errorText };
+      }
+      return res.status(500).json({ error: 'Failed to fetch files from Drive', status: driveResponse.status, details: errorData });
     }
 
-    const photosData = await photosResponse.json();
-    
-    // Returns array of mediaItems and nextPageToken
-    return res.status(200).json(photosData);
+    const driveData = await driveResponse.json();
+
+    // 3. Transform Drive files into a format similar to Google Photos API
+    //    Use thumbnailLink with modified size parameter for high-res display
+    const mediaItems = (driveData.files || []).map(file => {
+      // thumbnailLink from Drive looks like: https://lh3.googleusercontent.com/...=s220
+      // We can modify the size parameter for higher resolution
+      let imageUrl = '';
+      if (file.thumbnailLink) {
+        // Replace size parameter for high-res (2048px)
+        imageUrl = file.thumbnailLink.replace(/=s\d+$/, '=s2048');
+      }
+
+      return {
+        id: file.id,
+        filename: file.name,
+        mimeType: file.mimeType,
+        baseUrl: imageUrl,
+        mediaMetadata: file.imageMediaMetadata || {},
+      };
+    }).filter(item => item.baseUrl); // Only include items with valid URLs
+
+    console.log(`Fetched ${mediaItems.length} photos from Google Drive folder`);
+
+    return res.status(200).json({
+      mediaItems,
+      nextPageToken: driveData.nextPageToken || null,
+    });
 
   } catch (error) {
     console.error('Server error:', error);

@@ -1,8 +1,5 @@
 import { useState, useEffect } from 'react';
 
-// Adjust base URL for iPad Mini 5 (target resolution 2048x1536 pt max dimensions)
-const getImageUrl = (baseUrl) => `${baseUrl}=w2048-h2048`;
-
 export default function Carousel() {
   const [photos, setPhotos] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -16,15 +13,20 @@ export default function Carousel() {
       const response = await fetch(url);
 
       if (!response.ok) {
-        throw new Error('Failed to fetch from API');
+        let errMessage = 'Failed to fetch from API';
+        try {
+          const errData = await response.json();
+          errMessage = errData.error || errData.message || JSON.stringify(errData);
+        } catch (e) {
+          errMessage = await response.text();
+        }
+        throw new Error(`${response.status}: ${errMessage}`);
       }
 
       const data = await response.json();
 
-      if (data.mediaItems) {
-        // Filter out videos, we only want photos
-        const newPhotos = data.mediaItems.filter(item => item.mimeType?.startsWith('image/'));
-        setPhotos(prev => [...prev, ...newPhotos]);
+      if (data.mediaItems && data.mediaItems.length > 0) {
+        setPhotos(prev => [...prev, ...data.mediaItems]);
       }
       setPageToken(data.nextPageToken || null);
     } catch (err) {
@@ -117,7 +119,7 @@ export default function Carousel() {
         return (
           <img
             key={photo.id}
-            src={getImageUrl(photo.baseUrl)}
+            src={photo.baseUrl}
             alt={photo.filename || 'Google Photo'}
             className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-[2s] ease-in-out ${isCurrent ? 'opacity-100 z-10' : 'opacity-0 z-0'
               }`}
