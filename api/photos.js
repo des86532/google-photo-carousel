@@ -69,12 +69,14 @@ export default async function handler(req, res) {
     const pageToken = urlParams.searchParams.get('pageToken') || '';
 
     // Query: files in the specified folder that are images
-    const query = `'${GOOGLE_DRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false`;
+    // Query: files in the specified folder that are images OR videos
+    const query = `'${GOOGLE_DRIVE_FOLDER_ID}' in parents and (mimeType contains 'image/' or mimeType contains 'video/') and trashed = false`;
     
     const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
     driveUrl.searchParams.set('q', query);
     driveUrl.searchParams.set('pageSize', '50');
-    driveUrl.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,thumbnailLink,imageMediaMetadata)');
+    // Added webContentLink to support direct video streaming/downloading
+    driveUrl.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata)');
     driveUrl.searchParams.set('orderBy', 'createdTime desc');
     
     if (pageToken) {
@@ -102,26 +104,28 @@ export default async function handler(req, res) {
     const driveData = await driveResponse.json();
 
     // 3. Transform Drive files into a format similar to Google Photos API
-    //    Use thumbnailLink with modified size parameter for high-res display
     const mediaItems = (driveData.files || []).map(file => {
-      // thumbnailLink from Drive looks like: https://lh3.googleusercontent.com/...=s220
-      // We can modify the size parameter for higher resolution
-      let imageUrl = '';
-      if (file.thumbnailLink) {
+      let mediaUrl = '';
+      
+      if (file.mimeType.startsWith('video/')) {
+        // For videos, use webContentLink for playing
+        // (Note: webContentLink downloads the file, but standard HTML5 video player can stream it)
+        mediaUrl = file.webContentLink;
+      } else if (file.thumbnailLink) {
         // Replace size parameter for high-res (2048px)
-        imageUrl = file.thumbnailLink.replace(/=s\d+$/, '=s2048');
+        mediaUrl = file.thumbnailLink.replace(/=s\d+$/, '=s2048');
       }
 
       return {
         id: file.id,
         filename: file.name,
         mimeType: file.mimeType,
-        baseUrl: imageUrl,
-        mediaMetadata: file.imageMediaMetadata || {},
+        baseUrl: mediaUrl,
+        mediaMetadata: file.imageMediaMetadata || file.videoMediaMetadata || {},
       };
     }).filter(item => item.baseUrl); // Only include items with valid URLs
 
-    console.log(`Fetched ${mediaItems.length} photos from Google Drive folder`);
+    console.log(`Fetched ${mediaItems.length} media items from Google Drive folder`);
 
     return res.status(200).json({
       mediaItems,
@@ -133,3 +137,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 }
+
