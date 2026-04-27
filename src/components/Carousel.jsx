@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGooglePhotosPicker } from '../hooks/useGooglePhotosPicker';
 
 const getImageUrl = (baseUrl) => `${baseUrl}=w2048-h2048`;
@@ -98,6 +98,24 @@ export default function Carousel() {
   const [imageError, setImageError] = useState(null);
   const objectUrlsRef = useRef({});
 
+  const clearLoadedImages = useCallback(() => {
+    Object.values(objectUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current = {};
+    setObjectUrls({});
+  }, []);
+
+  const handlePickPhotos = useCallback(() => {
+    setCurrentIndex(0);
+    clearLoadedImages();
+    startPicking();
+  }, [clearLoadedImages, startPicking]);
+
+  const handleSignOut = useCallback(() => {
+    setCurrentIndex(0);
+    clearLoadedImages();
+    signOut();
+  }, [clearLoadedImages, signOut]);
+
   const visiblePhotos = useMemo(() => {
     if (photos.length === 0) return [];
 
@@ -109,15 +127,6 @@ export default function Carousel() {
 
     return [...indexes].map((index) => photos[index]).filter(Boolean);
   }, [currentIndex, photos]);
-
-  useEffect(() => {
-    if (photos.length === 0) {
-      setCurrentIndex(0);
-      Object.values(objectUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
-      objectUrlsRef.current = {};
-      setObjectUrls({});
-    }
-  }, [photos.length]);
 
   useEffect(() => {
     if (!accessToken || visiblePhotos.length === 0) return undefined;
@@ -221,9 +230,9 @@ export default function Carousel() {
         isPicking={isPicking}
         isReady={isReady}
         isSignedIn={isSignedIn}
-        onPickPhotos={startPicking}
+        onPickPhotos={handlePickPhotos}
         onSignIn={requestAccessToken}
-        onSignOut={signOut}
+        onSignOut={handleSignOut}
       />
     );
   }
@@ -253,14 +262,14 @@ export default function Carousel() {
       <div className="absolute right-4 top-4 z-20 flex gap-2 opacity-0 transition-opacity duration-300 hover:opacity-100 focus-within:opacity-100">
         <button
           type="button"
-          onClick={startPicking}
+          onClick={handlePickPhotos}
           className="bg-black/55 px-4 py-2 text-xs font-medium text-white/85 backdrop-blur transition hover:bg-black/75 hover:text-white"
         >
           Change photos
         </button>
         <button
           type="button"
-          onClick={signOut}
+          onClick={handleSignOut}
           className="bg-black/55 px-4 py-2 text-xs font-medium text-white/85 backdrop-blur transition hover:bg-black/75 hover:text-white"
         >
           Sign out

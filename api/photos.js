@@ -51,24 +51,15 @@ const getJsonBody = (req) => {
 };
 
 /**
- * Google Drive API - List images from a specific folder
- * 
- * Replaces the deprecated Google Photos Library API (deprecated March 31, 2025).
- * 
- * Setup:
- * 1. Create a folder in Google Drive
- * 2. Put your photos in it
- * 3. Set GOOGLE_DRIVE_FOLDER_ID in your environment variables
- * 4. Use a refresh token with `drive.readonly` scope
+ * Proxies Google Photos Picker API requests with the current user's access token.
  */
 export default async function handler(req, res) {
-  // CORS setup
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+    'Authorization, X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version',
   );
 
   if (req.method === 'OPTIONS') {
@@ -162,4 +153,3 @@ export default async function handler(req, res) {
     });
   }
 }
-

@@ -137,18 +137,6 @@ export function useGooglePhotosPicker() {
     });
   }, [accessToken, clientId]);
 
-  const signOut = useCallback(() => {
-    if (accessToken && window.google?.accounts?.oauth2) {
-      window.google.accounts.oauth2.revoke(accessToken);
-    }
-
-    clearStoredToken();
-    setAccessToken(null);
-    setSession(null);
-    setPhotos([]);
-    setPageToken(null);
-  }, [accessToken]);
-
   const callPhotosApi = useCallback(
     async (action, options = {}) => {
       if (!accessToken) {
@@ -176,6 +164,36 @@ export function useGooglePhotosPicker() {
     [accessToken],
   );
 
+  const deleteSession = useCallback(
+    async (sessionId) => {
+      if (!sessionId) return;
+
+      try {
+        await callPhotosApi('deleteSession', {
+          method: 'DELETE',
+          params: { sessionId },
+        });
+      } catch {
+        // Session cleanup is best-effort; the selected photos remain usable.
+      }
+    },
+    [callPhotosApi],
+  );
+
+  const signOut = useCallback(() => {
+    deleteSession(session?.id);
+
+    if (accessToken && window.google?.accounts?.oauth2) {
+      window.google.accounts.oauth2.revoke(accessToken);
+    }
+
+    clearStoredToken();
+    setAccessToken(null);
+    setSession(null);
+    setPhotos([]);
+    setPageToken(null);
+  }, [accessToken, deleteSession, session?.id]);
+
   const loadPickedPhotos = useCallback(
     async (sessionId, nextPageToken = '') => {
       setIsLoadingPhotos(true);
@@ -191,13 +209,18 @@ export function useGooglePhotosPicker() {
 
         setPhotos((previousPhotos) => [...previousPhotos, ...newPhotos]);
         setPageToken(data.nextPageToken || null);
+
+        if (!data.nextPageToken) {
+          setSession(null);
+          deleteSession(sessionId);
+        }
       } catch (err) {
         setError(err.message);
       } finally {
         setIsLoadingPhotos(false);
       }
     },
-    [callPhotosApi],
+    [callPhotosApi, deleteSession],
   );
 
   const pollSession = useCallback(
@@ -241,6 +264,8 @@ export function useGooglePhotosPicker() {
 
   const startPicking = useCallback(async () => {
     setError(null);
+    deleteSession(session?.id);
+    setSession(null);
     setPhotos([]);
     setPageToken(null);
 
@@ -272,7 +297,7 @@ export function useGooglePhotosPicker() {
       setError(err.message);
       setIsPicking(false);
     }
-  }, [callPhotosApi, pollSession]);
+  }, [callPhotosApi, deleteSession, pollSession, session?.id]);
 
   const loadMorePhotos = useCallback(() => {
     if (session?.id && pageToken && !isLoadingPhotos) {
