@@ -4,6 +4,7 @@ const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 const PHOTOS_PICKER_SCOPE = 'https://www.googleapis.com/auth/photospicker.mediaitems.readonly';
 const TOKEN_STORAGE_KEY = 'googlePhotosAccessToken';
 const TOKEN_EXPIRY_STORAGE_KEY = 'googlePhotosAccessTokenExpiresAt';
+const REDIRECT_STATE_STORAGE_KEY = 'googlePhotosAuthRedirectState';
 
 let googleIdentityScriptPromise;
 
@@ -82,6 +83,14 @@ const clearStoredToken = () => {
   sessionStorage.removeItem(TOKEN_EXPIRY_STORAGE_KEY);
 };
 
+const getRedirectUri = () => `${window.location.origin}${window.location.pathname}`;
+
+const createAuthState = () => {
+  const randomValues = new Uint32Array(4);
+  window.crypto.getRandomValues(randomValues);
+  return [...randomValues].map((value) => value.toString(36)).join('');
+};
+
 export function useGooglePhotosPicker() {
   const [isReady, setIsReady] = useState(false);
   const [accessToken, setAccessToken] = useState(() => getStoredToken());
@@ -95,6 +104,55 @@ export function useGooglePhotosPicker() {
 
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
   const isSignedIn = Boolean(accessToken);
+
+  useEffect(() => {
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const redirectedAccessToken = hashParams.get('access_token');
+    const redirectedError = hashParams.get('error');
+
+    if (!redirectedAccessToken && !redirectedError) return;
+
+    const expectedState = sessionStorage.getItem(REDIRECT_STATE_STORAGE_KEY);
+    const actualState = hashParams.get('state');
+    sessionStorage.removeItem(REDIRECT_STATE_STORAGE_KEY);
+
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+
+    if (expectedState && actualState !== expectedState) {
+      setError('Google sign-in state did not match. Please try again.');
+      return;
+    }
+
+    if (redirectedError) {
+      setError(hashParams.get('error_description') || redirectedError);
+      return;
+    }
+
+    storeToken(redirectedAccessToken, hashParams.get('expires_in'));
+    setAccessToken(redirectedAccessToken);
+    setError(null);
+  }, []);
+
+  const redirectToGoogleAuth = useCallback(() => {
+    if (!clientId) {
+      setError('Missing VITE_GOOGLE_CLIENT_ID.');
+      return;
+    }
+
+    const state = createAuthState();
+    sessionStorage.setItem(REDIRECT_STATE_STORAGE_KEY, state);
+
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authUrl.searchParams.set('client_id', clientId);
+    authUrl.searchParams.set('redirect_uri', getRedirectUri());
+    authUrl.searchParams.set('response_type', 'token');
+    authUrl.searchParams.set('scope', PHOTOS_PICKER_SCOPE);
+    authUrl.searchParams.set('prompt', 'consent');
+    authUrl.searchParams.set('include_granted_scopes', 'true');
+    authUrl.searchParams.set('state', state);
+
+    window.location.assign(authUrl.toString());
+  }, [clientId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -116,6 +174,19 @@ export function useGooglePhotosPicker() {
             setAccessToken(response.access_token);
             setError(null);
           },
+          error_callback: (err) => {
+            if (err?.type === 'popup_failed_to_open') {
+              redirectToGoogleAuth();
+              return;
+            }
+
+            if (err?.type === 'popup_closed') {
+              setError('Google sign-in popup was closed.');
+              return;
+            }
+
+            setError('Google sign-in could not start. Please try again.');
+          },
         });
         setIsReady(true);
       })
@@ -124,7 +195,7 @@ export function useGooglePhotosPicker() {
     return () => {
       isMounted = false;
     };
-  }, [clientId]);
+  }, [clientId, redirectToGoogleAuth]);
 
   const requestAccessToken = useCallback(() => {
     if (!clientId) {
