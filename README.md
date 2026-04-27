@@ -1,16 +1,39 @@
-# React + Vite
+# Google Photos PWA
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A full-screen Google Photos frame built with React, Vite, and the Google Photos Picker API.
 
-Currently, two official plugins are available:
+## Google setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+1. In Google Cloud Console, enable the Google Photos Picker API.
+2. Create an OAuth 2.0 Client ID for a Web application.
+3. Add your local and production origins to Authorized JavaScript origins.
+4. Add this scope to the OAuth consent screen:
 
-## React Compiler
+```text
+https://www.googleapis.com/auth/photospicker.mediaitems.readonly
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Environment variables
 
-## Expanding the ESLint configuration
+Create `.env` from `.env.example`:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```text
+VITE_GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
+```
+
+The old `GOOGLE_REFRESH_TOKEN` flow is no longer used. Each user signs in with Google and picks the photos they want this frame to play.
+
+## Development
+
+```bash
+npm install
+npm run dev
+```
+
+The Vite dev server only serves the React app. To test the `/api/photos` serverless function locally, use your deployment platform's local server, such as Vercel CLI.
+
+## Build
+
+```bash
+npm run build
+```

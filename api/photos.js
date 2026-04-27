@@ -1,4 +1,54 @@
-/* global process */
+const PICKER_API_BASE_URL = 'https://photospicker.googleapis.com/v1';
+
+const sendJson = (res, status, payload) => {
+  res.status(status).json(payload);
+};
+
+const getAccessToken = (req) => {
+  const authHeader = req.headers.authorization || '';
+
+  if (!authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+
+  return authHeader.slice('Bearer '.length);
+};
+
+const callPickerApi = async (path, accessToken, options = {}) => {
+  const response = await fetch(`${PICKER_API_BASE_URL}${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message = data.error?.message || data.error || 'Google Photos Picker API request failed';
+    const error = new Error(message);
+    error.status = response.status;
+    error.details = data;
+    throw error;
+  }
+
+  return data;
+};
+
+const getJsonBody = (req) => {
+  if (!req.body) return {};
+  if (typeof req.body === 'string') {
+    try {
+      return JSON.parse(req.body);
+    } catch {
+      return {};
+    }
+  }
+
+  return req.body;
+};
 
 /**
  * Google Drive API - List images from a specific folder
@@ -26,115 +76,90 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, GOOGLE_DRIVE_FOLDER_ID } = process.env;
+  const accessToken = getAccessToken(req);
 
-  // Debug: list all GOOGLE_* env vars (keys only)
-  const googleEnvKeys = Object.keys(process.env).filter(k => k.startsWith('GOOGLE'));
-  console.log('Available GOOGLE_* env vars:', googleEnvKeys);
-  console.log('GOOGLE_DRIVE_FOLDER_ID value:', GOOGLE_DRIVE_FOLDER_ID ? `"${GOOGLE_DRIVE_FOLDER_ID}"` : 'UNDEFINED');
-
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
-    return res.status(500).json({ error: 'Missing Google authentication environment variables' });
+  if (!accessToken) {
+    sendJson(res, 401, { error: 'Missing Google access token' });
+    return;
   }
 
-  if (!GOOGLE_DRIVE_FOLDER_ID) {
-    return res.status(500).json({ error: 'Missing GOOGLE_DRIVE_FOLDER_ID environment variable' });
-  }
+  const urlParams = new URL(req.url, `http://${req.headers.host}`);
+  const action = urlParams.searchParams.get('action') || '';
 
   try {
-    // 1. Get Access Token from Refresh Token
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: GOOGLE_REFRESH_TOKEN,
-        grant_type: 'refresh_token',
-      }).toString(),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorData = await tokenResponse.json();
-      console.error('Error fetching access token:', errorData);
-      return res.status(500).json({ error: 'Failed to obtain access token', details: errorData });
-    }
-
-    const { access_token } = await tokenResponse.json();
-
-    // 2. List image files from the specified Google Drive folder
-    const urlParams = new URL(req.url, `http://${req.headers.host}`);
-    const pageToken = urlParams.searchParams.get('pageToken') || '';
-
-    // Query: files in the specified folder that are images
-    // Query: files in the specified folder that are images OR videos
-    const query = `'${GOOGLE_DRIVE_FOLDER_ID}' in parents and (mimeType contains 'image/' or mimeType contains 'video/') and trashed = false`;
-    
-    const driveUrl = new URL('https://www.googleapis.com/drive/v3/files');
-    driveUrl.searchParams.set('q', query);
-    driveUrl.searchParams.set('pageSize', '50');
-    // Added webContentLink to support direct video streaming/downloading
-    driveUrl.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata)');
-    driveUrl.searchParams.set('orderBy', 'createdTime desc');
-    
-    if (pageToken) {
-      driveUrl.searchParams.set('pageToken', pageToken);
-    }
-
-    const driveResponse = await fetch(driveUrl.toString(), {
-      headers: {
-        'Authorization': `Bearer ${access_token}`,
-      },
-    });
-
-    if (!driveResponse.ok) {
-      const errorText = await driveResponse.text();
-      console.error('Error fetching files from Drive:', driveResponse.status, errorText);
-      let errorData;
-      try {
-        errorData = JSON.parse(errorText);
-      } catch {
-        errorData = { raw: errorText };
-      }
-      return res.status(500).json({ error: 'Failed to fetch files from Drive', status: driveResponse.status, details: errorData });
-    }
-
-    const driveData = await driveResponse.json();
-
-    // 3. Transform Drive files into a format similar to Google Photos API
-    const mediaItems = (driveData.files || []).map(file => {
-      let mediaUrl = '';
-      
-      if (file.mimeType.startsWith('video/')) {
-        // For videos, use webContentLink for playing
-        // (Note: webContentLink downloads the file, but standard HTML5 video player can stream it)
-        mediaUrl = file.webContentLink;
-      } else if (file.thumbnailLink) {
-        // Replace size parameter for high-res (2048px)
-        mediaUrl = file.thumbnailLink.replace(/=s\d+$/, '=s2048');
+    if (action === 'createSession') {
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { error: 'Method not allowed' });
+        return;
       }
 
-      return {
-        id: file.id,
-        filename: file.name,
-        mimeType: file.mimeType,
-        baseUrl: mediaUrl,
-        mediaMetadata: file.imageMediaMetadata || file.videoMediaMetadata || {},
-      };
-    }).filter(item => item.baseUrl); // Only include items with valid URLs
+      const session = await callPickerApi('/sessions', accessToken, {
+        method: 'POST',
+        body: getJsonBody(req),
+      });
 
-    console.log(`Fetched ${mediaItems.length} media items from Google Drive folder`);
+      sendJson(res, 200, session);
+      return;
+    }
 
-    return res.status(200).json({
-      mediaItems,
-      nextPageToken: driveData.nextPageToken || null,
-    });
+    if (action === 'getSession') {
+      const sessionId = urlParams.searchParams.get('sessionId');
 
+      if (!sessionId) {
+        sendJson(res, 400, { error: 'Missing sessionId' });
+        return;
+      }
+
+      const session = await callPickerApi(`/sessions/${encodeURIComponent(sessionId)}`, accessToken);
+      sendJson(res, 200, session);
+      return;
+    }
+
+    if (action === 'listMediaItems') {
+      const sessionId = urlParams.searchParams.get('sessionId');
+      const pageToken = urlParams.searchParams.get('pageToken') || '';
+
+      if (!sessionId) {
+        sendJson(res, 400, { error: 'Missing sessionId' });
+        return;
+      }
+
+      const params = new URLSearchParams({
+        sessionId,
+        pageSize: '50',
+      });
+
+      if (pageToken) {
+        params.set('pageToken', pageToken);
+      }
+
+      const mediaItems = await callPickerApi(`/mediaItems?${params.toString()}`, accessToken);
+      sendJson(res, 200, mediaItems);
+      return;
+    }
+
+    if (action === 'deleteSession') {
+      const sessionId = urlParams.searchParams.get('sessionId');
+
+      if (!sessionId) {
+        sendJson(res, 400, { error: 'Missing sessionId' });
+        return;
+      }
+
+      await callPickerApi(`/sessions/${encodeURIComponent(sessionId)}`, accessToken, {
+        method: 'DELETE',
+      });
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    sendJson(res, 400, { error: 'Unknown action' });
   } catch (error) {
-    console.error('Server error:', error);
-    return res.status(500).json({ error: 'Internal server error', message: error.message });
+    console.error('Google Photos Picker API error:', error.details || error);
+    sendJson(res, error.status || 500, {
+      error: error.message || 'Internal server error',
+      details: error.details,
+    });
   }
 }
 

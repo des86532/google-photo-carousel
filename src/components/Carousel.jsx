@@ -1,214 +1,277 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useSwipeable } from 'react-swipeable';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useGooglePhotosPicker } from '../hooks/useGooglePhotosPicker';
 
-// Slide 停留時間：5秒
-const SLIDE_DURATION = 5000;
+const getImageUrl = (baseUrl) => `${baseUrl}=w2048-h2048`;
+
+function FrameSetup({
+  error,
+  isLoadingPhotos,
+  isPicking,
+  isReady,
+  isSignedIn,
+  onPickPhotos,
+  onSignIn,
+  onSignOut,
+}) {
+  const title = isSignedIn ? 'Choose photos for this frame' : 'Connect Google Photos';
+  const status = isPicking
+    ? 'Waiting for your Google Photos selection...'
+    : isLoadingPhotos
+      ? 'Preparing selected photos...'
+      : isSignedIn
+        ? 'Pick the photos you want this frame to play.'
+        : 'Sign in with Google to select photos from your own library.';
+
+  return (
+    <main className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[#050505] text-white">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_25%,rgba(255,255,255,0.14),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.05),transparent_42%)]" />
+      <section className="relative flex w-full max-w-[520px] flex-col items-center px-8 text-center">
+        <div className="mb-8 h-px w-28 bg-white/30" />
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.42em] text-white/45">
+          Google Photos Frame
+        </p>
+        <h1 className="text-3xl font-light leading-tight text-white sm:text-5xl">
+          {title}
+        </h1>
+        <p className="mt-5 max-w-sm text-sm leading-6 text-white/58 sm:text-base">
+          {status}
+        </p>
+
+        {error && (
+          <p className="mt-6 w-full border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          {!isSignedIn ? (
+            <button
+              type="button"
+              onClick={onSignIn}
+              disabled={!isReady}
+              className="min-h-11 bg-white px-6 text-sm font-semibold text-black transition hover:bg-white/88 disabled:cursor-not-allowed disabled:bg-white/30"
+            >
+              {isReady ? 'Sign in with Google' : 'Loading Google...'}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onPickPhotos}
+                disabled={isPicking || isLoadingPhotos}
+                className="min-h-11 bg-white px-6 text-sm font-semibold text-black transition hover:bg-white/88 disabled:cursor-not-allowed disabled:bg-white/30"
+              >
+                {isPicking ? 'Selecting...' : 'Pick photos'}
+              </button>
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="min-h-11 border border-white/25 px-5 text-sm font-medium text-white/78 transition hover:border-white/45 hover:text-white"
+              >
+                Sign out
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+    </main>
+  );
+}
 
 export default function Carousel() {
-  const [photos, setPhotos] = useState([]);
+  const {
+    accessToken,
+    error,
+    isLoadingPhotos,
+    isPicking,
+    isReady,
+    isSignedIn,
+    loadMorePhotos,
+    pageToken,
+    photos,
+    requestAccessToken,
+    signOut,
+    startPicking,
+  } = useGooglePhotosPicker();
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [pageToken, setPageToken] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [isPaused, setIsPaused] = useState(false);
-  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [objectUrls, setObjectUrls] = useState({});
+  const [imageError, setImageError] = useState(null);
+  const objectUrlsRef = useRef({});
 
-  const fetchPhotos = async (token = '') => {
-    try {
-      const url = token ? `/api/photos?pageToken=${token}` : '/api/photos';
-      const response = await fetch(url);
+  const visiblePhotos = useMemo(() => {
+    if (photos.length === 0) return [];
 
-      if (!response.ok) {
-        let errMessage = 'Failed to fetch from API';
-        try {
-          const errData = await response.json();
-          errMessage = errData.error || errData.message || JSON.stringify(errData);
-        } catch (e) {
-          errMessage = await response.text();
-        }
-        throw new Error(`${response.status}: ${errMessage}`);
-      }
+    const indexes = new Set([
+      Math.max(currentIndex - 1, 0),
+      currentIndex,
+      Math.min(currentIndex + 1, photos.length - 1),
+    ]);
 
-      const data = await response.json();
-
-      if (data.mediaItems && data.mediaItems.length > 0) {
-        setPhotos(prev => {
-          // 防止重複載入相同的照片
-          const existingIds = new Set(prev.map(p => p.id));
-          const newPhotos = data.mediaItems.filter(p => !existingIds.has(p.id));
-          return [...prev, ...newPhotos];
-        });
-      }
-      setPageToken(data.nextPageToken || null);
-    } catch (err) {
-      console.error(err);
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // 初始獲取第一頁照片
-  useEffect(() => {
-    fetchPhotos();
-  }, []);
-
-  // 檢查是否需要提前載入下一頁（當滑動到剩下 10 張時）
-  useEffect(() => {
-    if (photos.length > 0 && currentIndex >= photos.length - 10 && pageToken) {
-      fetchPhotos(pageToken);
-    }
-  }, [currentIndex, photos.length, pageToken]);
-
-  // 前進下一張
-  const goNext = useCallback(() => {
-    if (photos.length === 0) return;
-    
-    setCurrentIndex(prev => {
-      const nextIndex = prev + 1;
-      
-      // 如果到了最後一張，且已經沒有下一頁
-      if (nextIndex >= photos.length && !pageToken) {
-        return 0; // 循環回到第一張
-      }
-      return nextIndex;
-    });
-    // 切換時重置影片播放狀態
-    setIsVideoPlaying(false);
-  }, [photos.length, pageToken]);
-
-  // 回到上一張
-  const goPrev = useCallback(() => {
-    if (photos.length === 0) return;
-    
-    setCurrentIndex(prev => {
-      // 避免回到負數，如果是 0 且想往回滑，就跳到最後一張
-      if (prev === 0) return photos.length - 1; 
-      return prev - 1;
-    });
-    setIsVideoPlaying(false);
-  }, [photos.length]);
-
-  // 設定自動輪播計時器 5秒
-  // 注意：如果是影片播放中（isVideoPlaying），或者被使用者按住暫停（isPaused），都不執行自動切換
-  useEffect(() => {
-    if (photos.length === 0 || isPaused || isVideoPlaying) return;
-    const timer = setInterval(goNext, SLIDE_DURATION);
-    return () => clearInterval(timer);
-  }, [photos.length, goNext, isPaused, isVideoPlaying]);
-
-  // 當前媒體如果是影片，處理播放狀態
-  useEffect(() => {
-    if (photos.length === 0) return;
-    const currentMedia = photos[currentIndex];
-    if (currentMedia?.mimeType?.startsWith('video/')) {
-      setIsVideoPlaying(true);
-    }
+    return [...indexes].map((index) => photos[index]).filter(Boolean);
   }, [currentIndex, photos]);
 
-  // 註冊滑動手勢
-  const swipeHandlers = useSwipeable({
-    onSwipedLeft: () => goNext(),   // 往左滑 -> 下一張
-    onSwipedRight: () => goPrev(),  // 往右滑 -> 上一張
-    trackMouse: true, // 在電腦版可以用滑鼠模擬觸控滑動
-    preventDefaultTouchmoveEvent: true, // 防止在 iPad 上滑動時畫面跟著捲動
-  });
+  useEffect(() => {
+    if (photos.length === 0) {
+      setCurrentIndex(0);
+      Object.values(objectUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current = {};
+      setObjectUrls({});
+    }
+  }, [photos.length]);
 
-  // 處理按住暫停 (Mouse & Touch)
-  const pointerDownHandlers = {
-    onPointerDown: () => setIsPaused(true),
-    onPointerUp: () => setIsPaused(false),
-    onPointerLeave: () => setIsPaused(false),
-    onPointerCancel: () => setIsPaused(false),
-  };
+  useEffect(() => {
+    if (!accessToken || visiblePhotos.length === 0) return undefined;
 
-  if (error) {
+    const controller = new AbortController();
+
+    const loadVisibleImages = async () => {
+      try {
+        const missingPhotos = visiblePhotos.filter((photo) => !objectUrlsRef.current[photo.id]);
+        const loadedEntries = await Promise.all(
+          missingPhotos.map(async (photo) => {
+            const response = await fetch(getImageUrl(photo.baseUrl), {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+              },
+              signal: controller.signal,
+            });
+
+            if (!response.ok) {
+              throw new Error('Failed to load selected photo.');
+            }
+
+            const blob = await response.blob();
+            return [photo.id, URL.createObjectURL(blob)];
+          }),
+        );
+
+        if (controller.signal.aborted) return;
+
+        setObjectUrls((previousUrls) => {
+          const nextVisibleIds = new Set(visiblePhotos.map((photo) => photo.id));
+          const nextUrls = {};
+
+          Object.entries(previousUrls).forEach(([id, url]) => {
+            if (nextVisibleIds.has(id)) {
+              nextUrls[id] = url;
+            } else {
+              URL.revokeObjectURL(url);
+            }
+          });
+
+          loadedEntries.forEach(([id, url]) => {
+            if (nextUrls[id]) {
+              URL.revokeObjectURL(url);
+            } else {
+              nextUrls[id] = url;
+            }
+          });
+
+          objectUrlsRef.current = nextUrls;
+          return nextUrls;
+        });
+        setImageError(null);
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setImageError(err.message);
+        }
+      }
+    };
+
+    loadVisibleImages();
+
+    return () => {
+      controller.abort();
+    };
+  }, [accessToken, visiblePhotos]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(objectUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
+  useEffect(() => {
+    if (photos.length === 0) return undefined;
+
+    const timer = window.setInterval(() => {
+      setCurrentIndex((previousIndex) => {
+        const nextIndex = previousIndex + 1;
+
+        if (nextIndex >= photos.length - 3 && pageToken) {
+          loadMorePhotos();
+        }
+
+        if (nextIndex >= photos.length) {
+          return 0;
+        }
+
+        return nextIndex;
+      });
+    }, 15000);
+
+    return () => window.clearInterval(timer);
+  }, [loadMorePhotos, pageToken, photos.length]);
+
+  if (!isSignedIn || photos.length === 0) {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-black text-white p-8 space-y-4">
-        <h2 className="text-xl font-bold text-red-500">Error Loading Media</h2>
-        <p className="text-white/60 text-center">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-6 py-2 mt-4 bg-white/10 rounded-full hover:bg-white/20 transition-colors"
-        >
-          重試 (Retry)
-        </button>
-      </div>
-    );
-  }
-
-  if (isLoading && photos.length === 0) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-black text-white">
-        <h1 className="text-2xl font-light tracking-widest text-white/50 animate-pulse">
-          載入中...
-        </h1>
-      </div>
-    );
-  }
-
-  if (photos.length === 0) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-black text-white">
-        <h1 className="text-2xl font-light tracking-widest text-white/50">
-          找不到任何圖片或影片
-        </h1>
-      </div>
+      <FrameSetup
+        error={error || imageError}
+        isLoadingPhotos={isLoadingPhotos}
+        isPicking={isPicking}
+        isReady={isReady}
+        isSignedIn={isSignedIn}
+        onPickPhotos={startPicking}
+        onSignIn={requestAccessToken}
+        onSignOut={signOut}
+      />
     );
   }
 
   return (
-    <div 
-      {...swipeHandlers} 
-      {...pointerDownHandlers}
-      className="relative w-full h-full bg-black overflow-hidden select-none outline-none cursor-pointer"
-    >
-      {photos.map((media, index) => {
-        // 為了節省 iPad 記憶體，只把前後兩張和當前媒體留在 DOM
-        const distance = Math.abs(index - currentIndex);
-        if (distance > 2) return null;
+    <div className="relative h-full w-full overflow-hidden bg-black">
+      {photos.map((photo, index) => {
+        if (index < currentIndex - 1 || index > currentIndex + 1) return null;
 
         const isCurrent = index === currentIndex;
-        const isVideo = media.mimeType?.startsWith('video/');
+        const src = objectUrls[photo.id];
+
+        if (!src) return null;
 
         return (
-          <div
-            key={media.id}
-            className={`absolute inset-0 w-full h-full flex items-center justify-center transition-opacity duration-[1.5s] ease-in-out pointer-events-none ${
-              isCurrent ? 'opacity-100 z-10' : 'opacity-0 z-0'
+          <img
+            key={photo.id}
+            src={src}
+            alt={photo.filename || 'Google Photo'}
+            className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-[2s] ease-in-out ${
+              isCurrent ? 'z-10 opacity-100' : 'z-0 opacity-0'
             }`}
-          >
-            {isVideo ? (
-              <video
-                src={media.baseUrl}
-                className="w-full h-full object-contain"
-                autoPlay={isCurrent}
-                muted
-                playsInline
-                loop={false}
-                onEnded={() => {
-                  if (isCurrent) {
-                    setIsVideoPlaying(false);
-                    goNext(); // 影片播完自動換下一張
-                  }
-                }}
-              />
-            ) : (
-              <img
-                src={media.baseUrl}
-                alt={media.filename || 'Google Drive Media'}
-                className="w-full h-full object-contain"
-              />
-            )}
-          </div>
+          />
         );
       })}
-      
-      {/* 隱藏的進度條提示或觸控區域，方便除錯，生產環境可移除 */}
-      <div className="absolute top-4 right-4 flex items-center space-x-2 text-white/20 text-xs z-50 pointer-events-none">
-        {isPaused && <span className="text-white/50">⏸ 暫停中</span>}
-        <span>{currentIndex + 1} / {photos.length}</span>
+
+      <div className="absolute right-4 top-4 z-20 flex gap-2 opacity-0 transition-opacity duration-300 hover:opacity-100 focus-within:opacity-100">
+        <button
+          type="button"
+          onClick={startPicking}
+          className="bg-black/55 px-4 py-2 text-xs font-medium text-white/85 backdrop-blur transition hover:bg-black/75 hover:text-white"
+        >
+          Change photos
+        </button>
+        <button
+          type="button"
+          onClick={signOut}
+          className="bg-black/55 px-4 py-2 text-xs font-medium text-white/85 backdrop-blur transition hover:bg-black/75 hover:text-white"
+        >
+          Sign out
+        </button>
       </div>
+
+      {imageError && (
+        <div className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 bg-black/70 px-4 py-2 text-sm text-red-100 backdrop-blur">
+          {imageError}
+        </div>
+      )}
     </div>
   );
 }
